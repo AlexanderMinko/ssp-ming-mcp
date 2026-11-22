@@ -1,0 +1,27 @@
+# Dependencies (npm install recreates them from package-lock.json, which IS committed)
+node_modules/
+
+# Build output and caches (the servers run from src/ through tsx today; these cover a later tsc build)
+dist/
+*.tsbuildinfo
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Secrets: never commit keys or URIs with credentials (SSP_MING_SIGNOZ_API_KEY, MONGO_URI, ...)
+.env
+.env.*
+!.env.example
+
+# Claude Code personal settings (.claude/settings.json with enabledMcpjsonServers IS committed)
+.claude/settings.local.json
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+
+# macOS
+.DS_Store

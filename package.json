@@ -1,0 +1,31 @@
+{
+  "name": "ssp-ming-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local MCP servers for the SSP/Exchange workspace: exchange-mongo (CRUD on the Mongo config), victoriametrics (read-only MetricsQL) and ssp-signoz (read-only logs and traces)",
+  "type": "module",
+  "scripts": {
+    "start:mongo": "tsx src/mongo/server.ts",
+    "start:victoriametrics": "tsx src/victoriametrics/server.ts",
+    "start:signoz": "tsx src/signoz/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*/*.test.ts",
+    "smoke:mongo": "tsx test/mongo/smoke.ts",
+    "smoke:victoriametrics": "tsx test/victoriametrics/smoke.ts",
+    "smoke:signoz": "tsx test/signoz/smoke.ts",
+    "sync-config": "tsx scripts/sync-mcp-config.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "mongodb": "7.8.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}
