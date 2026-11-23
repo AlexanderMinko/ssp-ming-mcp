@@ -94,6 +94,26 @@ describe("row shaping", () => {
   });
 });
 
+describe("pod-log rows from the EKS k8s-infra agent", () => {
+  it("takes the service from k8s.deployment.name and the severity from a level attribute", () => {
+    const line = shapeLog(
+      {
+        data: {
+          body: "{}",
+          severity_text: "",
+          timestamp: 1_800_000_000_000_000_000,
+          resources_string: { "k8s.deployment.name": "bidders", "k8s.pod.name": "bidders-1" },
+          attributes_string: { level: "INFO" },
+        },
+      },
+      100,
+      false,
+    );
+    assert.equal(line.service, "bidders");
+    assert.equal(line.severity, "INFO");
+  });
+});
+
 describe("trace ordering", () => {
   it("puts children under their parent with depth and start offset", () => {
     const spans = orderTrace([

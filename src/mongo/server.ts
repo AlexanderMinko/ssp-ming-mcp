@@ -19,7 +19,11 @@ async function main(): Promise<void> {
   // stdout is the MCP wire. Anything human-readable goes to stderr.
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`exchange-mongo MCP ready (${describeSources()})`);
+  try {
+    console.error(`exchange-mongo MCP ready (${describeSources()})`);
+  } catch (error: unknown) {
+    console.error(`exchange-mongo MCP ready, but the target is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
   const shutdown = async (): Promise<void> => {
     await closeMongo();
     process.exit(0);

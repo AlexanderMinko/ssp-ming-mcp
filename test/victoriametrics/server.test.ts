@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { localUrl } from "../../src/common/ports.js";
 import { buildServer } from "../../src/victoriametrics/server.js";
 import { vmagentUrl, vmUrl } from "../../src/victoriametrics/victoriametrics.js";
 
@@ -75,8 +76,8 @@ describe("victoriametrics server", () => {
 describe("URLs", () => {
   it("defaults to the local VictoriaMetrics single for both roles", async () => {
     await withEnv({ VM_URL: undefined, VMAGENT_URL: undefined }, async () => {
-      assert.equal(vmUrl(), "http://localhost:8428");
-      assert.equal(vmagentUrl(), "http://localhost:8428");
+      assert.equal(vmUrl(), localUrl("victoriametrics"));
+      assert.equal(vmagentUrl(), localUrl("victoriametrics"));
     });
   });
 

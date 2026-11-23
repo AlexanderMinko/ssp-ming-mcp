@@ -2,11 +2,9 @@
 # Opens every port-forward the MCP servers need to reach the EKS cluster, and reconnects each one when it drops
 # (a forward dies when its pod restarts). Run it in its own terminal and leave it running; Ctrl-C closes all.
 #
-# Local ports avoid the local Compose stack, so both can run at once:
-#   mongo     production/svc/mongodb       37017 -> 27017   (local Compose Mongo: 27017, bidders' own: 27018)
-#   vmsingle  monitoring/svc/vmsingle-vm   18428 -> 8428    (local VictoriaMetrics: 8428)
-#   vmagent   monitoring/svc/vmagent-vm    18429 -> 8429
-#   signoz    signoz/svc/signoz            13301 -> 8080    (local SigNoz: 3301)
+# The forwards come from the "eks" section of ports.json at the project root, the one source of truth that the MCP servers and
+# eks-env.sh read too. Add or change a forward there, never here. Its local ports avoid the local Compose stack,
+# so both can run at once. Besides the MCP resources it forwards the Grafana and Argo CD UIs.
 #
 # Then, in the shell that starts Claude Code: source scripts/eks-env.sh
 #
@@ -14,12 +12,21 @@
 # is never used, so a forward can never open against another cluster by accident.
 set -euo pipefail
 
-FORWARDS=(
-  "mongo     production  svc/mongodb      37017  27017"
-  "vmsingle  monitoring  svc/vmsingle-vm  18428  8428"
-  "vmagent   monitoring  svc/vmagent-vm   18429  8429"
-  "signoz    signoz      svc/signoz       13301  8080"
-)
+PORTS_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ports.json"
+# One line per forward: name namespace svc/<service> local_port remote_port. A while loop, not mapfile,
+# because macOS ships bash 3.2.
+FORWARDS=()
+while IFS= read -r line; do
+  FORWARDS+=("${line}")
+done < <(python3 -c '
+import json, sys
+for name, forward in json.load(open(sys.argv[1]))["eks"].items():
+    print(name, forward["namespace"], "svc/" + forward["service"], forward["localPort"], forward["remotePort"])
+' "${PORTS_FILE}")
+if [[ ${#FORWARDS[@]} -eq 0 ]]; then
+  echo "No forwards read from ${PORTS_FILE}" >&2
+  exit 1
+fi
 RECONNECT_DELAY_SECONDS=3
 
 context=${EKS_CONTEXT:-$(kubectl config get-contexts -o name | grep ':cluster/eks-dev$' | head -1 || true)}
@@ -56,6 +63,18 @@ stop_all() {
 }
 trap stop_all EXIT INT TERM
 
+port_of() {
+  local wanted=$1 line name namespace target local_port remote_port
+  for line in "${FORWARDS[@]}"; do
+    read -r name namespace target local_port remote_port <<<"${line}"
+    if [[ "${name}" == "${wanted}" ]]; then
+      echo "${local_port}"
+      return
+    fi
+  done
+  echo "?"
+}
+
 # One reconnect loop per forward. kubectl's own output is prefixed with the forward's name.
 forward_loop() {
   local name=$1 namespace=$2 target=$3 local_port=$4 remote_port=$5
@@ -75,6 +94,7 @@ for line in "${FORWARDS[@]}"; do
 done
 
 echo
-echo "Forwards are open. In the shell that starts Claude Code, run: source scripts/eks-env.sh"
+echo "Forwards are open. The UIs: Grafana http://localhost:$(port_of grafana), Argo CD http://localhost:$(port_of argocd)"
+echo "In the shell that starts Claude Code, run: source scripts/eks-env.sh"
 echo "Ctrl-C closes them all."
 wait

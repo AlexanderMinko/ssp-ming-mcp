@@ -1,5 +1,5 @@
 /**
- * Manual smoke test against a real SigNoz (SIGNOZ_URL, default http://localhost:3301; needs SIGNOZ_API_KEY).
+ * Manual smoke test against a real SigNoz (SIGNOZ_URL, default the local SigNoz from ports.json; needs SIGNOZ_API_KEY).
  * Spawns the server over stdio exactly as Claude Code does, calls the main tools once, and exits.
  * Run: SIGNOZ_API_KEY=... npm run smoke:signoz   (or export SSP_MING_SIGNOZ_API_KEY and map it, as .mcp.json does)
  */

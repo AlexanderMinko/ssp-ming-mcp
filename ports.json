@@ -1,0 +1,21 @@
+{
+  "local": {
+    "mongo": { "port": 27017, "owner": "Mongo for both databases. Today the container ssp-mongodb from the work repo ssp-backend serves it (the exchange compose has its Mongo commented out)" },
+    "biddersMongo": { "port": 27018, "owner": "ssp-ming-bidders/docker-compose.yml, the bidders' own Mongo" },
+    "victoriametrics": { "port": 8428, "owner": "ssp-ming-exchange/docker-compose.yml, VictoriaMetrics single, scrapes and stores" },
+    "grafana": { "port": 3000, "owner": "ssp-ming-exchange/docker-compose.yml" },
+    "signoz": { "port": 3301, "owner": "ssp-ming-exchange/observability/signoz/compose.yaml, UI and API" },
+    "otlpGrpc": { "port": 4317, "owner": "ssp-ming-exchange/observability/signoz/compose.yaml, SigNoz collector" },
+    "otlpHttp": { "port": 4318, "owner": "ssp-ming-exchange/observability/signoz/compose.yaml, SigNoz collector" },
+    "exchange": { "port": 8080, "owner": "the exchange app on the host" },
+    "bidders": { "port": 8081, "owner": "the bidders app on the host" }
+  },
+  "eks": {
+    "mongo": { "namespace": "production", "service": "mongodb", "localPort": 37017, "remotePort": 27017 },
+    "vmsingle": { "namespace": "monitoring", "service": "vmsingle-vm", "localPort": 18428, "remotePort": 8428 },
+    "vmagent": { "namespace": "monitoring", "service": "vmagent-vm", "localPort": 18429, "remotePort": 8429 },
+    "signoz": { "namespace": "signoz", "service": "signoz", "localPort": 13301, "remotePort": 8080 },
+    "grafana": { "namespace": "monitoring", "service": "vm-grafana", "localPort": 13000, "remotePort": 80 },
+    "argocd": { "namespace": "argocd", "service": "argocd-server", "localPort": 18080, "remotePort": 80 }
+  }
+}

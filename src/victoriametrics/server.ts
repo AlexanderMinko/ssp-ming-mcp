@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerDiscoveryTools } from "./tools/discovery.js";
 import { registerQueryTools } from "./tools/queries.js";
+import { describeTarget } from "../common/target.js";
 import { vmagentUrl, vmUrl } from "./victoriametrics.js";
 
 /** Builds the server without connecting a transport, so tests can attach an in-memory one. */
@@ -16,7 +17,12 @@ async function main(): Promise<void> {
   const server = buildServer();
   // stdout is the MCP wire. Anything human-readable goes to stderr.
   await server.connect(new StdioServerTransport());
-  console.error(`victoriametrics MCP ready (vmsingle ${vmUrl()}, vmagent ${vmagentUrl()})`);
+  try {
+    console.error(`victoriametrics MCP ready (${describeTarget()}; vmsingle ${vmUrl()}, vmagent ${vmagentUrl()})`);
+  } catch (error: unknown) {
+    // A bad target file must not kill the server: every tool call reports the same message instead.
+    console.error(`victoriametrics MCP ready, but the target is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
   process.on("SIGINT", () => process.exit(0));
   process.on("SIGTERM", () => process.exit(0));
 }

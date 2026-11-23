@@ -141,7 +141,7 @@ describe("ssp-signoz server", () => {
     await withClient({ SIGNOZ_URL: fakeUrl, SIGNOZ_API_KEY: "wrong-key" }, async (client) => {
       const result = await client.callTool({ name: "search_logs", arguments: {} });
       assert.equal(result.isError, true);
-      assert.match(textOf(result), /rejected the API key \(HTTP 401\)/);
+      assert.match(textOf(result), /rejected the API key \(HTTP 401/);
     });
   });
 
@@ -158,7 +158,9 @@ describe("ssp-signoz server", () => {
       assert.equal(request.url, "/api/v5/query_range");
       assert.equal(request.apiKey, "good-key");
       const spec = (request.body?.compositeQuery as { queries: Array<{ spec: Record<string, unknown> }> }).queries[0]?.spec;
-      assert.deepEqual(spec?.filter, { expression: "(service.name = 'exchange') AND (severity_text = 'WARN')" });
+      assert.deepEqual(spec?.filter, {
+        expression: "(service.name = 'exchange' OR k8s.deployment.name = 'exchange') AND (severity_text = 'WARN')",
+      });
       assert.equal(spec?.limit, 5);
       const answer = JSON.parse(textOf(result));
       assert.equal(answer.count, 1);

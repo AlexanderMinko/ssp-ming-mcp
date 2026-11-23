@@ -1,7 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { guarded } from "../../common/result.js";
-import { andFilter, queryScalar, signozRequest, signozUrl } from "../signoz.js";
+import { currentTarget } from "../../common/target.js";
+import { andFilter, keySource, queryScalar, signozRequest, signozUrl } from "../signoz.js";
 import { READ_ONLY, filterField, timeFields, windowMillis } from "./shared.js";
 
 interface ServiceAccount {
@@ -134,7 +135,8 @@ export function registerExploreTools(server: McpServer): void {
         } catch (error: unknown) {
           identity = { keyValid: false, problem: error instanceof Error ? error.message : String(error) };
         }
-        return { url: signozUrl(), version, ...identity };
+        const choice = currentTarget();
+        return { target: choice.target, targetSource: choice.source, url: signozUrl(), keySource: (await keySource()) ?? "none", version, ...identity };
       }),
   );
 }

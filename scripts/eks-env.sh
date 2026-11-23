@@ -24,14 +24,32 @@ if [ "${_eks_env_sourced}" != 1 ]; then
 fi
 unset _eks_env_sourced
 
+# ports.json sits one folder above this script. zsh and bash name the sourced file differently.
+if [ -n "${ZSH_VERSION:-}" ]; then
+  _eks_env_ports_file="$(cd "$(dirname "${(%):-%x}")/.." && pwd)/ports.json"
+else
+  _eks_env_ports_file="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ports.json"
+fi
+
 _eks_env_main() {
   local region=${AWS_REGION:-eu-central-1}
   local secret_id=${EKS_MONGO_SECRET_ID:-eks-dev/exchange/mongodb}
-  local mongo_hostport=localhost:37017
+  local ports
+  if ! ports=$(python3 -c '
+import json, sys
+forwards = json.load(open(sys.argv[1]))["eks"]
+print(*(forwards[name]["localPort"] for name in ("mongo", "vmsingle", "vmagent", "signoz")))
+' "${_eks_env_ports_file}" 2>/dev/null); then
+    echo "eks-env: could not read the ports from ${_eks_env_ports_file}. Nothing changed." >&2
+    return 1
+  fi
+  local mongo_port vmsingle_port vmagent_port signoz_port
+  read -r mongo_port vmsingle_port vmagent_port signoz_port <<<"${ports}"
+  local mongo_hostport=localhost:${mongo_port}
 
-  export VM_URL=http://localhost:18428
-  export VMAGENT_URL=http://localhost:18429
-  export SSP_MING_SIGNOZ_URL=http://localhost:13301
+  export VM_URL=http://localhost:${vmsingle_port}
+  export VMAGENT_URL=http://localhost:${vmagent_port}
+  export SSP_MING_SIGNOZ_URL=http://localhost:${signoz_port}
 
   # The secret holds MONGO_INITDB_ROOT_USERNAME / MONGO_INITDB_ROOT_PASSWORD. Python URL-encodes them, because a
   # password with @, : or / would otherwise break the URI. The values only pass through variables.
@@ -64,8 +82,9 @@ print(f"{user}:{password}")
 
   echo "MCP servers now point at EKS (restart Claude Code from this shell):"
   echo "  victoriametrics  ${VM_URL} (targets: ${VMAGENT_URL})"
-  echo "  exchange-mongo   ${mongo_hostport} $([ -n "${MONGO_URI:-}" ] && case "${MONGO_URI}" in *37017*) echo "with credentials from ${secret_id}" ;; *) echo "NOT set" ;; esac)"
+  echo "  exchange-mongo   ${mongo_hostport} $([ -n "${MONGO_URI:-}" ] && case "${MONGO_URI}" in *"${mongo_hostport}"*) echo "with credentials from ${secret_id}" ;; *) echo "NOT set" ;; esac)"
   echo "  ssp-signoz       ${SSP_MING_SIGNOZ_URL} (${signoz_state})"
 }
 _eks_env_main
 unset -f _eks_env_main
+unset _eks_env_ports_file

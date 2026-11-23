@@ -1,29 +1,51 @@
 /**
  * Thin client over the self-hosted SigNoz HTTP API (logs and traces).
  *
- * SIGNOZ_URL      the SigNoz UI/API (local Compose: http://localhost:3301, EKS: a port-forward).
- * SIGNOZ_API_KEY  a service-account key (Settings → Service Accounts → Keys). Comes from the shell, never a file.
+ * Each SigNoz instance has its own service accounts, so the key depends on the target (src/common/target.ts):
  *
- * The .mcp.json entry maps SSP_MING_SIGNOZ_URL / SSP_MING_SIGNOZ_API_KEY from the shell onto these names, so a key
+ *   target local  URL  SIGNOZ_URL, else the Compose SigNoz (ports.json local)
+ *                 key  SIGNOZ_API_KEY, else the Keychain item ssp-signoz-api-key
+ *   target eks    URL  SIGNOZ_URL, else the signoz forward (ports.json eks)
+ *                 key  SIGNOZ_EKS_API_KEY, else the Keychain item ssp-signoz-eks-api-key
+ *
+ * In eks mode SIGNOZ_API_KEY is ignored on purpose: ~/.zshrc exports the local key in every shell, and the EKS
+ * SigNoz would reject it. .mcp.json maps the shell's SSP_MING_SIGNOZ_* variables onto these names, so a key
  * exported for another SigNoz (for example the work one) is never sent here by accident.
  */
+import { forwardUrl, localUrl } from "../common/ports.js";
+import { currentTarget, describeTarget, explicitSetting, readKeychain } from "../common/target.js";
 
-const DEFAULT_URL = "http://localhost:3301";
+const TARGET_SETTINGS = {
+  local: { url: localUrl("signoz"), keyEnv: "SIGNOZ_API_KEY", keychainItem: "ssp-signoz-api-key" },
+  eks: { url: forwardUrl("signoz"), keyEnv: "SIGNOZ_EKS_API_KEY", keychainItem: "ssp-signoz-eks-api-key" },
+} as const;
 const REQUEST_TIMEOUT_MS = 30_000;
 
 export function signozUrl(): string {
-  return (process.env.SIGNOZ_URL ?? DEFAULT_URL).replace(/\/+$/, "");
+  return (explicitSetting("SIGNOZ_URL") ?? TARGET_SETTINGS[currentTarget().target].url).replace(/\/+$/, "");
 }
 
-function apiKey(): string {
-  const key = process.env.SIGNOZ_API_KEY;
-  if (key === undefined || key.trim() === "") {
+/** Where the key would come from, for check_connection and the startup log. Never the key itself. */
+export async function keySource(): Promise<string | undefined> {
+  const settings = TARGET_SETTINGS[currentTarget().target];
+  if (explicitSetting(settings.keyEnv) !== undefined) {
+    return `env ${settings.keyEnv}`;
+  }
+  return (await readKeychain(settings.keychainItem)) === undefined ? undefined : `Keychain item ${settings.keychainItem}`;
+}
+
+async function apiKey(): Promise<string> {
+  const target = currentTarget().target;
+  const settings = TARGET_SETTINGS[target];
+  const key = explicitSetting(settings.keyEnv) ?? (await readKeychain(settings.keychainItem));
+  if (key === undefined) {
     throw new Error(
-      "SIGNOZ_API_KEY is not set. Create a service-account key in SigNoz (Settings → Service Accounts → Keys), " +
-        "export SSP_MING_SIGNOZ_API_KEY in the shell, and restart Claude Code.",
+      `No SigNoz API key for target ${target}. Create a service-account key in that SigNoz (Settings → Service Accounts → Keys), ` +
+        `then store it: security add-generic-password -U -a "$USER" -s ${settings.keychainItem} -w` +
+        (target === "local" ? " (or export SSP_MING_SIGNOZ_API_KEY)" : ""),
     );
   }
-  return key.trim();
+  return key;
 }
 
 interface ErrorEnvelope {
@@ -58,7 +80,7 @@ export interface RequestOptions {
 export async function signozRequest<T>(path: string, options: RequestOptions): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (options.authenticated !== false) {
-    headers["SIGNOZ-API-KEY"] = apiKey();
+    headers["SIGNOZ-API-KEY"] = await apiKey();
   }
   if (options.body !== undefined) {
     headers["Content-Type"] = "application/json";
@@ -76,11 +98,14 @@ export async function signozRequest<T>(path: string, options: RequestOptions): P
     });
   } catch (error: unknown) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`SigNoz unreachable at ${signozUrl()} (${reason}). Is it running, or is the port-forward up?`);
+    throw new Error(`SigNoz unreachable at ${signozUrl()} (${reason}; ${describeTarget()}). Is it running, or is the port-forward up?`);
   }
   const text = await response.text();
   if (response.status === 401 || response.status === 403) {
-    throw new Error(`SigNoz rejected the API key (HTTP ${response.status}). Check SSP_MING_SIGNOZ_API_KEY and the service account's role.`);
+    throw new Error(
+      `SigNoz at ${signozUrl()} rejected the API key (HTTP ${response.status}; ${describeTarget()}). ` +
+        "The key must come from this SigNoz instance and its service account needs a viewer role.",
+    );
   }
   if (text.trimStart().startsWith("<")) {
     throw new Error(`SigNoz answered ${path} with an HTML page, so this SigNoz version has no such API route.`);
@@ -104,6 +129,15 @@ export async function signozRequest<T>(path: string, options: RequestOptions): P
 /** Quotes a value for a SigNoz filter expression: single quotes, with backslash and quote escaped. */
 export function quoteLiteral(value: string): string {
   return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+}
+
+/**
+ * Matches one service in logs from either source: service.name (OTLP) or k8s.deployment.name (pod log files).
+ * SigNoz treats a key it has never seen as absent, so the unused half of the OR matches nothing.
+ */
+export function serviceCondition(service: string): string {
+  const literal = quoteLiteral(service);
+  return `service.name = ${literal} OR k8s.deployment.name = ${literal}`;
 }
 
 /** Joins the non-empty conditions with AND, wrapping each in parentheses so a user's OR stays grouped. */
@@ -188,6 +222,12 @@ export async function queryScalar(startMs: number, endMs: number, query: Builder
 // ---- Row shaping. Key names differ between SigNoz versions, so every getter tries the known spellings.
 
 const RESOURCE_MAPS = ["resources_string", "resource_string", "resource", "resources"];
+
+/**
+ * Where a record names its service. Apps that push OTLP set service.name (local Compose). On EKS the k8s-infra
+ * agent tails pod log files instead, so log records carry only the Kubernetes names.
+ */
+const SERVICE_KEYS = ["service.name", "serviceName", "k8s.deployment.name", "k8s.container.name"];
 const ATTRIBUTE_MAPS = ["attributes_string", "attribute_string", "attributes", "tagMap"];
 
 function mapEntry(data: Record<string, unknown>, mapNames: string[], key: string): unknown {
@@ -255,8 +295,8 @@ export function shapeLog(row: RawRow, bodyChars: number, includeAttributes: bool
   const body = asText(data.body);
   const line: LogLine = {
     time: rowTime(row, data),
-    severity: asText(pick(data, ["severity_text", "severityText"])),
-    service: asText(pick(data, ["service.name", "serviceName"], RESOURCE_MAPS)),
+    severity: asText(pick(data, ["severity_text", "severityText", "level"], ATTRIBUTE_MAPS)),
+    service: asText(pick(data, SERVICE_KEYS, RESOURCE_MAPS)),
     body: body !== undefined && body.length > bodyChars ? `${body.slice(0, bodyChars)}… (${body.length} chars)` : body,
     traceId: asText(pick(data, ["trace_id", "traceId", "traceID"])),
     spanId: asText(pick(data, ["span_id", "spanId", "spanID"])),

@@ -9,7 +9,7 @@
     "start:victoriametrics": "tsx src/victoriametrics/server.ts",
     "start:signoz": "tsx src/signoz/server.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/*/*.test.ts",
+    "test": "SSP_MING_MCP_TARGET=local SSP_MING_NO_KEYCHAIN=1 tsx --test test/*/*.test.ts",
     "smoke:mongo": "tsx test/mongo/smoke.ts",
     "smoke:victoriametrics": "tsx test/victoriametrics/smoke.ts",
     "smoke:signoz": "tsx test/signoz/smoke.ts",

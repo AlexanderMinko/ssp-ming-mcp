@@ -1,5 +1,5 @@
 /**
- * Manual smoke test against a real VictoriaMetrics (VM_URL, default http://localhost:8428; targets from VMAGENT_URL,
+ * Manual smoke test against a real VictoriaMetrics (VM_URL, default the local VictoriaMetrics from ports.json; targets from VMAGENT_URL,
  * default VM_URL). Spawns the server over stdio exactly as Claude Code does, calls each tool once, and exits.
  * Run: npm run smoke:victoriametrics
  */

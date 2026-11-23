@@ -7,7 +7,7 @@ runs as its own process with its own `.mcp.json` entry.
 |---|---|---|---|
 | `exchange-mongo` | `src/mongo/server.ts` | Mongo (`MONGO_URI`, `BIDDERS_MONGO_URI`) | CRUD on supply partners, bidders, creatives |
 | `victoriametrics` | `src/victoriametrics/server.ts` | VictoriaMetrics HTTP API (`VM_URL`, `VMAGENT_URL`) | Read-only MetricsQL, discovery and cardinality |
-| `ssp-signoz` | `src/signoz/server.ts` | SigNoz HTTP API (`SSP_MING_SIGNOZ_URL`, `SSP_MING_SIGNOZ_API_KEY`) | Read-only logs, traces, services and aggregations |
+| `ssp-signoz` | `src/signoz/server.ts` | SigNoz HTTP API, with a service-account key per SigNoz instance | Read-only logs, traces, services and aggregations |
 
 Claude Code shows the tools as `mcp__<server>__<tool>`.
 
@@ -107,27 +107,39 @@ Each search tool also takes `raw: true`, which returns SigNoz's unshaped rows. U
 
 ### Settings of `ssp-signoz`
 
-Unlike the other backends, SigNoz requires an API key for every query. The `.mcp.json` entry maps two
-shell variables onto the names the server reads, so a key exported for another SigNoz is never sent here.
+Unlike the other backends, SigNoz requires an API key for every query. Each SigNoz instance has its own service
+accounts, so the local key and the EKS key differ. The server picks the URL and key that match the target:
 
-| Shell variable | Server reads | Default |
+| Target | URL | Key, first match wins |
 |---|---|---|
-| `SSP_MING_SIGNOZ_URL` | `SIGNOZ_URL` | `http://localhost:3301`, the local Compose SigNoz |
-| `SSP_MING_SIGNOZ_API_KEY` | `SIGNOZ_API_KEY` | Empty, which makes every query stop with a message that says how to set it |
+| `local` | `http://localhost:3301` | Shell variable `SSP_MING_SIGNOZ_API_KEY`, else Keychain item `ssp-signoz-api-key` |
+| `eks` | `http://localhost:13301` | Shell variable `SSP_MING_SIGNOZ_EKS_API_KEY`, else Keychain item `ssp-signoz-eks-api-key` |
 
-To create a key, open the SigNoz UI as an admin and go to Settings → Service Accounts → New Service Account.
+A non-empty `SSP_MING_SIGNOZ_URL` overrides the URL for either target. In `eks` mode the local key is ignored on purpose,
+because the EKS SigNoz would reject it.
+
+To create a key, open that SigNoz's UI as an admin and go to Settings → Service Accounts → New Service Account.
 Give the account a viewer role, then open its Keys tab and add a key. SigNoz shows the key only once.
-Export it in the shell you start Claude Code from, and never put it into `.mcp.json` or a chat:
+Store it in the Keychain. The command prompts for the key, so it never lands in a file or your shell history:
 
 ```bash
-export SSP_MING_SIGNOZ_API_KEY='<the key>'
+security add-generic-password -U -a "$USER" -s ssp-signoz-api-key -w
 ```
 
-Then ask Claude to run `check_connection`. It should report `keyValid: true`.
+Use `ssp-signoz-eks-api-key` for the EKS key. Then ask Claude to run `check_connection`. It reports the target,
+where the key came from, and `keyValid: true`.
 
 ## Install and verify
 
 Node 22+ must run from `/opt/homebrew/bin/node`. The Intel `node@24` under `/usr/local` is broken on this machine.
+
+`.mcp.json` starts each server with `${SSP_MING_NODE:-node}`. Set `SSP_MING_NODE` when plain `node` may resolve to a
+Node built for another CPU than the one `npm install` ran on. On this Mac the desktop app finds the Intel x64 Node first,
+which can't load the arm64 esbuild. The servers then exit at once with `Connection closed`. Set this in `~/.zshrc`:
+
+```bash
+export SSP_MING_NODE=/opt/homebrew/bin/node
+```
 
 ```bash
 PATH=/opt/homebrew/bin:$PATH npm install
@@ -141,7 +153,8 @@ PATH=/opt/homebrew/bin:$PATH npm run typecheck
 PATH=/opt/homebrew/bin:$PATH npm test
 ```
 
-Expected: 33 passing tests, with no backend needed. The SigNoz tests start a small fake SigNoz.
+Expected: 45 passing tests, with no backend needed. The SigNoz tests start a small fake SigNoz. The test script pins
+the target to `local` and skips the Keychain, so your own target file and keys can't change the results.
 
 ```bash
 PATH=/opt/homebrew/bin:$PATH npm run smoke:mongo
@@ -155,7 +168,7 @@ PATH=/opt/homebrew/bin:$PATH npm run smoke:victoriametrics
 PATH=/opt/homebrew/bin:$PATH npm run smoke:signoz
 ```
 
-The SigNoz smoke test needs `SSP_MING_SIGNOZ_API_KEY` in the shell. Without it, it shows only the version and the missing-key message.
+The SigNoz smoke test needs a key for the current target. Without one, it shows only the version and the missing-key message.
 
 Expected: each server starts over stdio and prints the result of every tool it calls.
 
@@ -199,30 +212,42 @@ move a server, or their tools keep the old names and paths.
 
 ## Pointing at EKS
 
-The servers always run on your laptop. To point them at EKS, two scripts replace the manual port-forwards and exports.
-[`scripts/README.md`](scripts/README.md) is the short how-to for every script.
+The servers always run on your laptop. One file decides whether they talk to the local Compose stack or to EKS:
 
-| Script | How you run it | What it does |
-|---|---|---|
-| `scripts/eks-port-forward.sh` | In its own terminal, left running | Opens the four forwards and reconnects each one when it drops. Ctrl-C closes them all |
-| `scripts/eks-env.sh` | `source` it in the shell that starts Claude Code | Exports the EKS URLs, builds `MONGO_URI` and `BIDDERS_MONGO_URI` from Secrets Manager, and sets the EKS SigNoz key |
+```bash
+echo eks > ~/.ssp-ming-mcp-target
+```
 
-1. In one terminal, open the forwards:
+Write `local` to switch back, or delete the file, which also means `local`. The setting works the same in the terminal
+and the desktop app. Each server reads the file when it starts, so the change applies to the next Claude Code session.
+The app needs no restart.
+
+| Target | VictoriaMetrics | Mongo | SigNoz |
+|---|---|---|---|
+| `local` | `:8428`, which also lists the targets | `:27017`, no credentials | `:3301` with the local key |
+| `eks` | vmsingle `:18428`, vmagent `:18429` | `:37017`, user and password from Secrets Manager | `:13301` with the EKS key |
+
+The target is resolved in this order, and the first match wins:
+1. The variable `SSP_MING_MCP_TARGET`, set to `local` or `eks`.
+2. The first word of `~/.ssp-ming-mcp-target`. Set `SSP_MING_MCP_TARGET_FILE` to use another path.
+3. `local`.
+
+An unknown value, such as `prod`, is an error in every tool call. It never quietly falls back to `local`.
+Explicit settings still win over the target. A non-empty `VM_URL`, `VMAGENT_URL`, `MONGO_URI`, `BIDDERS_MONGO_URI` or
+`SSP_MING_SIGNOZ_URL` is used as given.
+
+**Check the target.** Each server logs its target and its addresses when it starts. Every connection error names the
+target, and `check_connection` on `ssp-signoz` reports it, together with where the key came from.
+
+**Open the forwards for EKS.** The `eks` target expects the forwards from [`scripts/eks-port-forward.sh`](scripts/README.md).
+Run it in its own terminal and leave it running:
 
 ```bash
 ./scripts/eks-port-forward.sh
 ```
 
-2. In the terminal you start Claude Code from, point the servers at EKS, then start Claude Code there:
-
-```bash
-source scripts/eks-env.sh
-```
-
-It prints one line per server. A script cannot change its caller's environment, which is why this one is sourced.
-To go back to the local Compose stack, open a new terminal.
-
-The forwards use local ports that don't clash with the local Compose stack, so both can run at the same time:
+The forwards come from the `eks` section of [`ports.json`](ports.json). That file is the one source of truth for every port, and its `local` section holds the Compose ports.
+Their local ports don't clash with the local Compose stack, so both can run at the same time:
 
 | Forward | Local port | Cluster target | Local Compose port |
 |---|---|---|---|
@@ -230,22 +255,23 @@ The forwards use local ports that don't clash with the local Compose stack, so b
 | vmsingle | 18428 | `monitoring/svc/vmsingle-vm:8428` | 8428 |
 | vmagent | 18429 | `monitoring/svc/vmagent-vm:8429` | none |
 | SigNoz | 13301 | `signoz/svc/signoz:8080` | 3301 |
+| Grafana UI | 13000 | `monitoring/svc/vm-grafana:80` | 3000 |
+| Argo CD UI | 18080 | `argocd/svc/argocd-server:80` | none |
 
 **Safety.** The forward script pins the kubectl context, by default the one ending in `:cluster/eks-dev`. It never uses
 your current context, which may point at another cluster. Set `EKS_CONTEXT` to override it.
 
-**Mongo credentials.** `eks-env.sh` reads `eks-dev/exchange/mongodb` from Secrets Manager, the same secret ESO gives the
-apps. It URL-encodes the user and password and prints neither.
+**Mongo credentials.** In `eks` mode the Mongo server reads `eks-dev/exchange/mongodb` from Secrets Manager through the
+AWS CLI, the same secret ESO gives the apps. It tries `aws` on the `PATH`, then the usual Homebrew paths, because the
+desktop app's `PATH` may lack Homebrew. Set `SSP_MING_AWS` to point at another binary. Errors show the host, never the
+credentials.
 
-**The EKS SigNoz key.** The EKS SigNoz has its own service accounts, so the local key doesn't work there. Create a key
-in the EKS SigNoz the same way as locally, then store it in the Keychain once:
-
-```bash
-security add-generic-password -U -a "$USER" -s ssp-signoz-eks-api-key -w
-```
-
+**The EKS SigNoz key.** Store it once in the Keychain item `ssp-signoz-eks-api-key`, as in "Settings of `ssp-signoz`".
 The cluster is often destroyed, and its SigNoz loses the service account with it. After a rebuild, create a new key
-and run the same command again.
+and store it again with the same command. The `-U` flag replaces the old entry.
+
+**`scripts/eks-env.sh` is optional now.** It still exports the EKS addresses into one shell, which helps tools such as
+`mongosh` in a terminal. Claude Code no longer needs it.
 
 ## Adding a server
 

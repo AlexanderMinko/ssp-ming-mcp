@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { guarded } from "../../common/result.js";
-import { andFilter, queryRaw, quoteLiteral, shapeLog } from "../signoz.js";
+import { andFilter, queryRaw, quoteLiteral, serviceCondition, shapeLog } from "../signoz.js";
 import { READ_ONLY, filterField, timeFields, windowMillis } from "./shared.js";
 
 export function registerLogTools(server: McpServer): void {
@@ -13,7 +13,7 @@ export function registerLogTools(server: McpServer): void {
         "Return log lines from SigNoz, newest first. Narrow by service, severity, text or trace id; " +
         "add any SigNoz filter expression. Use to read what a service logged around an error or for one request.",
       inputSchema: {
-        service: z.string().optional().describe("service.name, for example exchange or bidders"),
+        service: z.string().optional().describe("Service, for example exchange or bidders. Matches service.name or k8s.deployment.name"),
         severity: z.string().optional().describe("severity_text, for example ERROR or WARN"),
         text: z.string().optional().describe("Substring the log body must contain"),
         traceId: z.string().optional().describe("Only lines logged inside this trace"),
@@ -31,7 +31,7 @@ export function registerLogTools(server: McpServer): void {
       guarded(async () => {
         const { startMs, endMs } = windowMillis(args.start, args.end);
         const filter = andFilter([
-          args.service === undefined ? undefined : `service.name = ${quoteLiteral(args.service)}`,
+          args.service === undefined ? undefined : serviceCondition(args.service),
           args.severity === undefined ? undefined : `severity_text = ${quoteLiteral(args.severity.toUpperCase())}`,
           args.text === undefined ? undefined : `body CONTAINS ${quoteLiteral(args.text)}`,
           args.traceId === undefined ? undefined : `trace_id = ${quoteLiteral(args.traceId)}`,

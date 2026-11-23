@@ -3,24 +3,40 @@
  * (https://docs.victoriametrics.com/victoriametrics/url-examples/).
  *
  * Two roles, two URLs:
- *   VM_URL       the TSDB that answers queries: vmsingle (EKS: svc/vmsingle-vm :8428, local Compose: :8428).
- *   VMAGENT_URL  the scraper that owns the target list: vmagent (EKS: svc/vmagent-vm :8429).
- *                Unset = VM_URL, because the local VictoriaMetrics single both scrapes and stores.
+ *   vmsingle  the TSDB that answers queries
+ *   vmagent   the scraper that owns the target list
+ *
+ * Where the URLs come from (first match wins):
+ *   1. VM_URL / VMAGENT_URL, when set and not blank
+ *   2. target local: the Compose VictoriaMetrics single (ports.json local), which both scrapes and stores (vmagent = VM_URL)
+ *   3. target eks:   the forwards from scripts/eks-port-forward.sh, ports from ports.json eks
  */
+import { forwardUrl, localUrl } from "../common/ports.js";
+import { currentTarget, describeTarget, explicitSetting } from "../common/target.js";
 
-const DEFAULT_VM_URL = "http://localhost:8428"; // local Compose VictoriaMetrics single
 const REQUEST_TIMEOUT_MS = 15_000;
 
+const TARGET_URLS = {
+  local: { vmsingle: localUrl("victoriametrics"), vmagent: localUrl("victoriametrics") },
+  eks: { vmsingle: forwardUrl("vmsingle"), vmagent: forwardUrl("vmagent") },
+} as const;
+
+const trimSlashes = (url: string): string => url.replace(/\/+$/, "");
+
 export function vmUrl(): string {
-  return (process.env.VM_URL ?? DEFAULT_VM_URL).replace(/\/+$/, "");
+  return trimSlashes(explicitSetting("VM_URL") ?? TARGET_URLS[currentTarget().target].vmsingle);
 }
 
 export function vmagentUrl(): string {
-  const configured = process.env.VMAGENT_URL;
-  if (configured === undefined || configured.trim() === "") {
+  const explicit = explicitSetting("VMAGENT_URL");
+  if (explicit !== undefined) {
+    return trimSlashes(explicit);
+  }
+  // An explicit VM_URL without a VMAGENT_URL means one process does both jobs, as the local single does.
+  if (explicitSetting("VM_URL") !== undefined) {
     return vmUrl();
   }
-  return configured.replace(/\/+$/, "");
+  return TARGET_URLS[currentTarget().target].vmagent;
 }
 
 interface ApiEnvelope<T> {
@@ -53,7 +69,7 @@ export async function apiGet<T>(
     response = await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   } catch (error: unknown) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`${target} unreachable at ${base} (${reason}). Is it running, or is the port-forward up?`);
+    throw new Error(`${target} unreachable at ${base} (${reason}; ${describeTarget()}). Is it running, or is the port-forward up?`);
   }
   const text = await response.text();
   let envelope: ApiEnvelope<T>;
