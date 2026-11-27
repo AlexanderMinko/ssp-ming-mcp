@@ -114,6 +114,7 @@ accounts, so the local key and the EKS key differ. The server picks the URL and 
 |---|---|---|
 | `local` | `http://localhost:3301` | Shell variable `SSP_MING_SIGNOZ_API_KEY`, else Keychain item `ssp-signoz-api-key` |
 | `eks` | `http://localhost:13301` | Shell variable `SSP_MING_SIGNOZ_EKS_API_KEY`, else Keychain item `ssp-signoz-eks-api-key` |
+| `kind` | `http://localhost:13301` | Keychain item `ssp-signoz-kind-api-key` |
 
 A non-empty `SSP_MING_SIGNOZ_URL` overrides the URL for either target. In `eks` mode the local key is ignored on purpose,
 because the EKS SigNoz would reject it.
@@ -226,9 +227,10 @@ The app needs no restart.
 |---|---|---|---|
 | `local` | `:8428`, which also lists the targets | `:27017`, no credentials | `:3301` with the local key |
 | `eks` | vmsingle `:18428`, vmagent `:18429` | `:37017`, user and password from Secrets Manager | `:13301` with the EKS key |
+| `kind` | the same forwards as `eks` | `:37017`, user and password from the cluster Secret `secret-source/exchange-mongodb` | `:13301` with the kind key |
 
 The target is resolved in this order, and the first match wins:
-1. The variable `SSP_MING_MCP_TARGET`, set to `local` or `eks`.
+1. The variable `SSP_MING_MCP_TARGET`, set to `local`, `eks` or `kind`.
 2. The first word of `~/.ssp-ming-mcp-target`. Set `SSP_MING_MCP_TARGET_FILE` to use another path.
 3. `local`.
 

@@ -1,6 +1,6 @@
 import { Db, MongoClient } from "mongodb";
 import { forwardHost, localHost } from "../common/ports.js";
-import { EKS_REGION, currentTarget, describeTarget, explicitSetting, runAws } from "../common/target.js";
+import { EKS_REGION, KIND_CONTEXT, currentTarget, describeTarget, explicitSetting, isCluster, runAws, runKubectl } from "../common/target.js";
 
 /**
  * Two databases, two connection strings. Locally both live on the same Mongo (docker-compose);
@@ -11,6 +11,11 @@ import { EKS_REGION, currentTarget, describeTarget, explicitSetting, runAws } fr
  *   2. target local: the Compose Mongo (ports.json local), no credentials
  *   3. target eks:   the mongo forward (ports.json eks) (scripts/eks-port-forward.sh), with the root user and
  *                    password read from Secrets Manager (the same secret ESO gives the apps)
+ *   4. target kind:  the same forward, with the root user and password read from the cluster Secret that ESO's
+ *                    Kubernetes provider uses as its source (ssp-ming-k8s-local terraform/03-eso.tf), via kubectl
+ *
+ * The target decides where the credentials come from; nothing else does. Both cluster sources hold the same two
+ * keys, so one function builds the URI.
  */
 const SOURCES = {
   exchange: { envVar: "MONGO_URI", database: "ssp-exchange" },
@@ -21,8 +26,13 @@ export type Source = keyof typeof SOURCES;
 const LOCAL_HOST = localHost("mongo");
 const EKS_HOST = forwardHost("mongo");
 const eksSecretId = (): string => explicitSetting("SSP_MING_EKS_MONGO_SECRET_ID") ?? "eks-dev/exchange/mongodb";
+/** `<namespace>/<name>` of the kind cluster's source Secret. */
+const kindSecretRef = (): string => explicitSetting("SSP_MING_KIND_MONGO_SECRET") ?? "secret-source/exchange-mongodb";
 
-/** Builds the EKS URI from the secret's JSON. User and password are URL-encoded, so any character is safe. */
+/**
+ * Builds the URI of the forwarded Mongo (eks or kind) from the secret's JSON. User and password are URL-encoded,
+ * so any character is safe.
+ */
 export function eksMongoUri(secretJson: string, database: string): string {
   const secret = JSON.parse(secretJson) as Record<string, unknown>;
   const user = secret.MONGO_INITDB_ROOT_USERNAME;
@@ -39,18 +49,24 @@ export function describeUri(uri: string): string {
   return uri.replace(/^mongodb(\+srv)?:\/\/([^@/]*@)?/, "").replace(/\?.*$/, "");
 }
 
-async function resolveUri(source: Source): Promise<string> {
-  const { envVar, database } = SOURCES[source];
-  const explicit = explicitSetting(envVar);
-  if (explicit !== undefined) {
-    return explicit;
+/**
+ * Turns `kubectl get secret -o json` output into the same JSON shape the Secrets Manager secret has.
+ * A Kubernetes Secret stores every value base64-encoded under `data`.
+ */
+export function decodeKubernetesSecret(secretManifestJson: string): string {
+  const manifest = JSON.parse(secretManifestJson) as { data?: Record<string, unknown> };
+  const decoded: Record<string, string> = {};
+  for (const [key, value] of Object.entries(manifest.data ?? {})) {
+    if (typeof value === "string") {
+      decoded[key] = Buffer.from(value, "base64").toString("utf8");
+    }
   }
-  if (currentTarget().target === "local") {
-    return `mongodb://${LOCAL_HOST}/${database}`;
-  }
-  let secretJson: string;
+  return JSON.stringify(decoded);
+}
+
+async function readEksSecret(): Promise<string> {
   try {
-    secretJson = await runAws([
+    return await runAws([
       "secretsmanager",
       "get-secret-value",
       "--region",
@@ -66,7 +82,34 @@ async function resolveUri(source: Source): Promise<string> {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`Could not read ${eksSecretId()} from Secrets Manager (expired AWS session?): ${reason}`);
   }
-  return eksMongoUri(secretJson, database);
+}
+
+async function readKindSecret(): Promise<string> {
+  const [namespace, name] = kindSecretRef().split("/");
+  if (namespace === undefined || name === undefined || namespace === "" || name === "") {
+    throw new Error(`SSP_MING_KIND_MONGO_SECRET must be <namespace>/<name>, got "${kindSecretRef()}".`);
+  }
+  try {
+    return decodeKubernetesSecret(
+      await runKubectl(["--context", KIND_CONTEXT(), "--namespace", namespace, "get", "secret", name, "--output", "json"]),
+    );
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Could not read the Secret ${kindSecretRef()} with context ${KIND_CONTEXT()} (is the kind cluster up?): ${reason}`);
+  }
+}
+
+async function resolveUri(source: Source): Promise<string> {
+  const { envVar, database } = SOURCES[source];
+  const explicit = explicitSetting(envVar);
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  const target = currentTarget().target;
+  if (target === "local") {
+    return `mongodb://${LOCAL_HOST}/${database}`;
+  }
+  return eksMongoUri(target === "kind" ? await readKindSecret() : await readEksSecret(), database);
 }
 
 const clients = new Map<Source, MongoClient>();
@@ -95,7 +138,7 @@ export function describeSources(): string {
     if (explicit !== undefined) {
       return `${source}=${describeUri(explicit)} (explicit)`;
     }
-    return `${source}=${currentTarget().target === "eks" ? EKS_HOST : LOCAL_HOST}/${SOURCES[source].database}`;
+    return `${source}=${isCluster(currentTarget().target) ? EKS_HOST : LOCAL_HOST}/${SOURCES[source].database}`;
   });
   return `${describeTarget()}; ${hosts.join(", ")}`;
 }

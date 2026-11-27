@@ -10,6 +10,7 @@
  *   1. VM_URL / VMAGENT_URL, when set and not blank
  *   2. target local: the Compose VictoriaMetrics single (ports.json local), which both scrapes and stores (vmagent = VM_URL)
  *   3. target eks:   the forwards from scripts/eks-port-forward.sh, ports from ports.json eks
+ *   4. target kind:  the same forwards, opened against the kind cluster (ssp-ming-k8s-local scripts/port-forward.sh)
  */
 import { forwardUrl, localUrl } from "../common/ports.js";
 import { currentTarget, describeTarget, explicitSetting } from "../common/target.js";
@@ -19,6 +20,7 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const TARGET_URLS = {
   local: { vmsingle: localUrl("victoriametrics"), vmagent: localUrl("victoriametrics") },
   eks: { vmsingle: forwardUrl("vmsingle"), vmagent: forwardUrl("vmagent") },
+  kind: { vmsingle: forwardUrl("vmsingle"), vmagent: forwardUrl("vmagent") },
 } as const;
 
 const trimSlashes = (url: string): string => url.replace(/\/+$/, "");

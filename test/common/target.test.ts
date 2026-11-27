@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { after, beforeEach, describe, it } from "node:test";
 import { EKS_FORWARDS, LOCAL_PORTS, forwardHost, forwardUrl, localUrl } from "../../src/common/ports.js";
 import { currentTarget, explicitSetting, resetTargetCache } from "../../src/common/target.js";
-import { describeUri, eksMongoUri } from "../../src/mongo/mongo.js";
+import { decodeKubernetesSecret, describeUri, eksMongoUri } from "../../src/mongo/mongo.js";
 import { signozUrl } from "../../src/signoz/signoz.js";
 import { vmagentUrl, vmUrl } from "../../src/victoriametrics/victoriametrics.js";
 
@@ -67,7 +67,7 @@ describe("target resolution", () => {
   it("rejects an unknown value instead of falling back to local", () => {
     writeFileSync(file, "prod");
     resetTargetCache();
-    assert.throws(() => currentTarget(), /must be "local" or "eks"/);
+    assert.throws(() => currentTarget(), /must be one of: local, eks, kind/);
   });
 
   it("treats blank variables as unset, as .mcp.json passes them", () => {
@@ -90,6 +90,14 @@ describe("URLs per target", () => {
     assert.equal(signozUrl(), forwardUrl("signoz"));
   });
 
+  it("kind: the same forwarded ports as eks", () => {
+    setEnv({ SSP_MING_MCP_TARGET: "kind" });
+    assert.equal(currentTarget().target, "kind");
+    assert.equal(vmUrl(), forwardUrl("vmsingle"));
+    assert.equal(vmagentUrl(), forwardUrl("vmagent"));
+    assert.equal(signozUrl(), forwardUrl("signoz"));
+  });
+
   it("an explicit URL wins over the target", () => {
     setEnv({ SSP_MING_MCP_TARGET: "eks", VM_URL: "http://localhost:9999/", SIGNOZ_URL: "http://localhost:9998" });
     assert.equal(vmUrl(), "http://localhost:9999");
@@ -106,6 +114,21 @@ describe("EKS Mongo URI", () => {
 
   it("refuses a secret without the expected keys", () => {
     assert.throws(() => eksMongoUri(JSON.stringify({ user: "x" }), "ssp-exchange"), /MONGO_INITDB_ROOT_USERNAME/);
+  });
+
+  it("kind: decodes a Kubernetes Secret into the same shape as the Secrets Manager secret", () => {
+    const manifest = JSON.stringify({
+      data: {
+        MONGO_INITDB_ROOT_USERNAME: Buffer.from("root").toString("base64"),
+        MONGO_INITDB_ROOT_PASSWORD: Buffer.from("p@ss").toString("base64"),
+      },
+    });
+    const uri = eksMongoUri(decodeKubernetesSecret(manifest), "ssp-bidders");
+    assert.equal(uri, `mongodb://root:p%40ss@${forwardHost("mongo")}/ssp-bidders?authSource=admin&directConnection=true`);
+  });
+
+  it("kind: a Secret without data lacks the expected keys", () => {
+    assert.throws(() => eksMongoUri(decodeKubernetesSecret(JSON.stringify({})), "ssp-exchange"), /MONGO_INITDB_ROOT_USERNAME/);
   });
 
   it("describes a URI without its credentials", () => {

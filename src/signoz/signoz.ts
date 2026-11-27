@@ -7,8 +7,10 @@
  *                 key  SIGNOZ_API_KEY, else the Keychain item ssp-signoz-api-key
  *   target eks    URL  SIGNOZ_URL, else the signoz forward (ports.json eks)
  *                 key  SIGNOZ_EKS_API_KEY, else the Keychain item ssp-signoz-eks-api-key
+ *   target kind   URL  SIGNOZ_URL, else the same forward as eks
+ *                 key  SIGNOZ_KIND_API_KEY, else the Keychain item ssp-signoz-kind-api-key
  *
- * In eks mode SIGNOZ_API_KEY is ignored on purpose: ~/.zshrc exports the local key in every shell, and the EKS
+ * In eks and kind mode SIGNOZ_API_KEY is ignored on purpose: ~/.zshrc exports the local key in every shell, and the EKS
  * SigNoz would reject it. .mcp.json maps the shell's SSP_MING_SIGNOZ_* variables onto these names, so a key
  * exported for another SigNoz (for example the work one) is never sent here by accident.
  */
@@ -18,6 +20,8 @@ import { currentTarget, describeTarget, explicitSetting, readKeychain } from "..
 const TARGET_SETTINGS = {
   local: { url: localUrl("signoz"), keyEnv: "SIGNOZ_API_KEY", keychainItem: "ssp-signoz-api-key" },
   eks: { url: forwardUrl("signoz"), keyEnv: "SIGNOZ_EKS_API_KEY", keychainItem: "ssp-signoz-eks-api-key" },
+  // Same forward as eks, its own key: the kind SigNoz has its own service accounts, and they die with the cluster.
+  kind: { url: forwardUrl("signoz"), keyEnv: "SIGNOZ_KIND_API_KEY", keychainItem: "ssp-signoz-kind-api-key" },
 } as const;
 const REQUEST_TIMEOUT_MS = 30_000;
 

@@ -6,14 +6,14 @@ Read the workspace `../CLAUDE.md` first. Working mode: **Peer**.
 
 One Node/TypeScript project (`@modelcontextprotocol/sdk`) with three stdio MCP servers. Each server is a
 separate process and a separate entry in the workspace root `.mcp.json`. All three point at the local Compose
-stack or at EKS, per the target in `~/.ssp-ming-mcp-target` (`src/common/target.ts`). They share `package.json`,
+stack, at EKS or at the local kind cluster, per the target in `~/.ssp-ming-mcp-target` (`src/common/target.ts`). They share `package.json`,
 `node_modules` and `src/common/`. See `README.md` for the tools, layout and connection.
 
 | Server | Entry point | Env |
 |---|---|---|
-| `exchange-mongo` | `src/mongo/server.ts` | Optional overrides `MONGO_URI`, `BIDDERS_MONGO_URI`. eks: credentials from Secrets Manager via the `aws` CLI |
+| `exchange-mongo` | `src/mongo/server.ts` | Optional overrides `MONGO_URI`, `BIDDERS_MONGO_URI`. eks: credentials from Secrets Manager via the `aws` CLI. kind: from the cluster Secret `secret-source/exchange-mongodb` via `kubectl --context kind-ssp-local` |
 | `victoriametrics` | `src/victoriametrics/server.ts` | Optional overrides `VM_URL`, `VMAGENT_URL` |
-| `ssp-signoz` | `src/signoz/server.ts` | Optional `SIGNOZ_URL`; key `SIGNOZ_API_KEY` (local) or `SIGNOZ_EKS_API_KEY` (eks), else the Keychain items `ssp-signoz-api-key` / `ssp-signoz-eks-api-key`. `.mcp.json` maps them from the shell's `SSP_MING_SIGNOZ_*` |
+| `ssp-signoz` | `src/signoz/server.ts` | Optional `SIGNOZ_URL`; key `SIGNOZ_API_KEY` (local) or `SIGNOZ_EKS_API_KEY` (eks) or `SIGNOZ_KIND_API_KEY` (kind), else the Keychain items `ssp-signoz-api-key` / `ssp-signoz-eks-api-key` / `ssp-signoz-kind-api-key`. `.mcp.json` maps them from the shell's `SSP_MING_SIGNOZ_*` |
 
 ## Contract of exchange-mongo with the services (do not drift)
 
@@ -49,13 +49,14 @@ field, update `src/mongo/schemas.ts`, the tool in `src/mongo/tools/`, this table
 ## Commands
 
 ```bash
-PATH=/opt/homebrew/bin:$PATH npm test              # 45 tests, no backend needed; pins target local, skips the Keychain
+PATH=/opt/homebrew/bin:$PATH npm test              # 49 tests, no backend needed; pins target local, skips the Keychain
 PATH=/opt/homebrew/bin:$PATH npm run typecheck
 PATH=/opt/homebrew/bin:$PATH npm run smoke:mongo   # stdio round-trip against both Mongo URIs
 PATH=/opt/homebrew/bin:$PATH npm run smoke:victoriametrics
 PATH=/opt/homebrew/bin:$PATH npm run smoke:signoz           # needs a key for the current target
 ./scripts/eks-port-forward.sh                              # EKS: forwards in their own terminal
 echo eks > ~/.ssp-ming-mcp-target                          # EKS: then start a new Claude Code session
+echo kind > ~/.ssp-ming-mcp-target                         # kind: forwards from ../ssp-ming-k8s-local/scripts/port-forward.sh
 ```
 
 ## Gotchas
@@ -77,4 +78,5 @@ echo eks > ~/.ssp-ming-mcp-target                          # EKS: then start a n
 - Row keys of raw span results were not confirmed against v0.150 when the server was written (21/11/2026); `shapeSpan` tries several spellings. If a shaped field is empty, call the tool with `raw: true` and fix the getter.
 - On EKS, SigNoz is the Service `signoz` (port 8080) in namespace `signoz`, from `ssp-ming-exchange-terraform/platform/07-signoz.tf`. Its service accounts differ from the local SigNoz, so it needs its own key.
 - EKS scripts: `eks-port-forward.sh` pins the kubectl context (`EKS_CONTEXT`, default `*:cluster/eks-dev`) because the current context may be a work cluster; never make it fall back to the current context. Every port lives only in `ports.json` (decided 23/11/2026). Its `local` section mirrors the Compose stack and the host apps. The Compose files stay independent of it (decided 23/11/2026), so a port change there must be copied here by hand. Its `eks` section lists the forwards (namespace, Service, local and remote port), including the Grafana (`vm-grafana`) and Argo CD (`argocd-server`) UIs. Both scripts read the `eks` section with `python3`. `src/common/ports.ts` (`localUrl`, `localHost`, `forwardUrl`, `forwardHost`) gives the servers their defaults for both targets. Never hardcode a port elsewhere. A test fails if two entries share a laptop port. `eks-env.sh` must be sourced, reads the Mongo user and password from Secrets Manager and the EKS SigNoz key from the Keychain item `ssp-signoz-eks-api-key`, and must never print either.
-- Target switch (decided 22/11/2026): `SSP_MING_MCP_TARGET`, else the first word of `~/.ssp-ming-mcp-target` (`local` | `eks`), else `local`; an unknown value is an error, never a silent `local`. Chosen over shell variables because the desktop app takes its environment once at launch (from an older `~/.zshrc` read, as seen 22/11/2026), so `source eks-env.sh` and toggles in `~/.zshrc` did not reach it. Resolved once per server process; a new session picks up a change. `runAws` tries `aws`, `/opt/homebrew/bin/aws`, `/usr/local/bin/aws` because the app's `PATH` may lack Homebrew.
+- Target `kind` (added 25/11/2026): the local kind cluster of `ssp-ming-k8s-local`. The target is the one flag that decides the address AND where credentials come from. `kind` reuses the `eks` forwards of `ports.json` (same namespaces and Service names, so only one cluster can be forwarded at a time) and differs only in credentials: Mongo from the cluster Secret `secret-source/exchange-mongodb` (override `SSP_MING_KIND_MONGO_SECRET`, `<namespace>/<name>`) through `kubectl` with the context `kind-ssp-local` (override `SSP_MING_KIND_CONTEXT`; never the current context), SigNoz from the Keychain item `ssp-signoz-kind-api-key`. `runKubectl` tries `kubectl`, `/usr/local/bin/kubectl`, `/opt/homebrew/bin/kubectl` (override `SSP_MING_KUBECTL`). `SIGNOZ_KIND_API_KEY` is not mapped in `.mcp.json`; the Keychain is the supported path. `eks-port-forward.sh` and `eks-env.sh` stay EKS-only.
+- Target switch (decided 22/11/2026): `SSP_MING_MCP_TARGET`, else the first word of `~/.ssp-ming-mcp-target` (`local` | `eks` | `kind`), else `local`; an unknown value is an error, never a silent `local`. Chosen over shell variables because the desktop app takes its environment once at launch (from an older `~/.zshrc` read, as seen 22/11/2026), so `source eks-env.sh` and toggles in `~/.zshrc` did not reach it. Resolved once per server process; a new session picks up a change. `runAws` tries `aws`, `/opt/homebrew/bin/aws`, `/usr/local/bin/aws` because the app's `PATH` may lack Homebrew.
